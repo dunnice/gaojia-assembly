@@ -14,8 +14,7 @@ Thumbs.db
 frontend/node_modules/
 frontend/dist/
 
-# Go / SQLite
-backend-go/*.db
+# Go / SQLite（.db 已纳入版本，WAL 临时文件忽略）
 backend-go/*.db-shm
 backend-go/*.db-wal
 backend-go/gaojia-server
