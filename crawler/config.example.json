@@ -1,0 +1,26 @@
+{
+  "api": {
+    "base_url": "https://t.51cto.com",
+    "subject_code": "240",
+    "timeout_seconds": 30,
+    "sleep_seconds": 0.2,
+    "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "origin": "https://rk.51cto.com",
+      "referer": "https://rk.51cto.com/t/n/chapter-manage/list/sub-240",
+      "user-agent": "Mozilla/5.0",
+      "x-requested-with": "XMLHttpRequest",
+      "x-async-request": "true",
+      "cookie": "请替换成你自己的完整Cookie"
+    }
+  },
+  "database": {
+    "host": "127.0.0.1",
+    "port": 3306,
+    "user": "root",
+    "password": "123456",
+    "database": "ruankao_gaojia",
+    "charset": "utf8mb4"
+  }
+}

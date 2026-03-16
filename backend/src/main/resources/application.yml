@@ -1,0 +1,16 @@
+server:
+  port: 5170
+
+spring:
+  application:
+    name: gaojia-backend
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/ruankao_gaojia?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    username: ruankao_user
+    password: Rk8!vN3#qL7@xP2$hT9^mZ4&cW6
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jackson:
+    default-property-inclusion: non_null
+
+app:
+  default-user-id: 1

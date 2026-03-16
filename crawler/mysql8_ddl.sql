@@ -1,0 +1,170 @@
+CREATE DATABASE IF NOT EXISTS `ruankao_gaojia`
+  DEFAULT CHARACTER SET utf8mb4
+  DEFAULT COLLATE utf8mb4_0900_ai_ci;
+
+USE `ruankao_gaojia`;
+
+CREATE TABLE IF NOT EXISTS `ag_subject` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `subject_code` VARCHAR(32) NOT NULL COMMENT '接口subject编码，例如240',
+  `subject_name` VARCHAR(255) NOT NULL DEFAULT '' COMMENT '科目名称，本地维护',
+  `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1启用 0停用',
+  `raw_json` JSON DEFAULT NULL COMMENT '原始JSON',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_subject_code` (`subject_code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='科目表';
+
+CREATE TABLE IF NOT EXISTS `ag_sync_batch` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `batch_no` VARCHAR(64) NOT NULL COMMENT '批次号',
+  `sync_type` VARCHAR(32) NOT NULL COMMENT 'chapter_tree/chapter_questions/question_detail',
+  `subject_code` VARCHAR(32) DEFAULT NULL COMMENT '科目编码',
+  `chapter_id` BIGINT DEFAULT NULL COMMENT '章节ID',
+  `question_id` BIGINT DEFAULT NULL COMMENT '题目ID',
+  `request_url` VARCHAR(500) NOT NULL DEFAULT '' COMMENT '请求URL',
+  `request_method` VARCHAR(16) NOT NULL DEFAULT 'GET' COMMENT '请求方法',
+  `request_payload` JSON DEFAULT NULL COMMENT '请求参数',
+  `response_raw` JSON DEFAULT NULL COMMENT '原始响应',
+  `status` VARCHAR(16) NOT NULL DEFAULT 'SUCCESS' COMMENT 'SUCCESS/FAIL',
+  `error_message` VARCHAR(1000) NOT NULL DEFAULT '' COMMENT '错误信息',
+  `started_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '开始时间',
+  `finished_at` DATETIME DEFAULT NULL COMMENT '结束时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_sync_type_subject` (`sync_type`, `subject_code`),
+  KEY `idx_sync_chapter` (`chapter_id`),
+  KEY `idx_sync_question` (`question_id`),
+  KEY `idx_batch_no` (`batch_no`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='同步批次日志';
+
+CREATE TABLE IF NOT EXISTS `ag_chapter` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `chapter_id` BIGINT NOT NULL COMMENT '接口章节ID',
+  `subject_code` VARCHAR(32) NOT NULL COMMENT '科目编码',
+  `parent_chapter_id` BIGINT NOT NULL DEFAULT 0 COMMENT '父章节ID，0表示根',
+  `chapter_level` TINYINT NOT NULL COMMENT '1一级章节 2二级章节',
+  `chapter_name` VARCHAR(255) NOT NULL COMMENT '章节名称',
+  `sort_no` INT NOT NULL DEFAULT 0 COMMENT '排序号',
+  `all_question_num` INT NOT NULL DEFAULT 0 COMMENT '总题数',
+  `do_question_num` INT NOT NULL DEFAULT 0 COMMENT '已做题数',
+  `do_subject_num` INT NOT NULL DEFAULT 0 COMMENT '已做专题数',
+  `right_question_num` INT NOT NULL DEFAULT 0 COMMENT '答对题数',
+  `right_question_rate` VARCHAR(32) NOT NULL DEFAULT '' COMMENT '答对率原始值，如62%或-',
+  `is_finish` TINYINT DEFAULT NULL COMMENT '是否完成，章节明细里常见',
+  `raw_json` JSON DEFAULT NULL COMMENT '原始JSON',
+  `last_sync_batch_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '最近同步批次ID',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_chapter_id` (`chapter_id`),
+  KEY `idx_subject_parent` (`subject_code`, `parent_chapter_id`),
+  KEY `idx_last_sync_batch_id` (`last_sync_batch_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='章节表';
+
+CREATE TABLE IF NOT EXISTS `ag_question` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `question_id` BIGINT NOT NULL COMMENT '接口题目ID',
+  `unique_value` VARCHAR(128) NOT NULL DEFAULT '' COMMENT '题目唯一值',
+  `user_id` BIGINT DEFAULT NULL COMMENT '题目归属用户ID',
+  `title_html` MEDIUMTEXT NOT NULL COMMENT '题干HTML',
+  `question_type` VARCHAR(32) NOT NULL DEFAULT '' COMMENT '题目类型',
+  `show_type_name` VARCHAR(64) NOT NULL DEFAULT '' COMMENT '题型显示名称',
+  `answer_type` VARCHAR(32) NOT NULL DEFAULT '' COMMENT '答案类型',
+  `knowledge` VARCHAR(255) NOT NULL DEFAULT '' COMMENT '知识点',
+  `analyze_text` MEDIUMTEXT COMMENT '题目解析',
+  `answer_json` JSON DEFAULT NULL COMMENT '答案JSON数组',
+  `material_text` MEDIUMTEXT COMMENT '材料题文本',
+  `score_rule` TEXT COMMENT '计分规则',
+  `difficulty_id` INT DEFAULT NULL COMMENT '难度ID',
+  `first_id` BIGINT DEFAULT NULL COMMENT '一级分类ID',
+  `second_id` BIGINT DEFAULT NULL COMMENT '二级分类ID',
+  `three_id` BIGINT DEFAULT NULL COMMENT '三级分类ID/subject',
+  `parent_id` BIGINT DEFAULT NULL COMMENT '父题ID',
+  `root_id` BIGINT DEFAULT NULL COMMENT '根题ID',
+  `new_parent_id` BIGINT DEFAULT NULL COMMENT '新父题ID',
+  `sort_no` INT NOT NULL DEFAULT 0 COMMENT '排序号',
+  `sort_son` INT NOT NULL DEFAULT 0 COMMENT '子排序',
+  `rank_no` INT NOT NULL DEFAULT 0 COMMENT '排名',
+  `orig` TINYINT NOT NULL DEFAULT 0 COMMENT '是否原创',
+  `is_new` TINYINT NOT NULL DEFAULT 0 COMMENT '是否新题',
+  `is_delete` TINYINT NOT NULL DEFAULT 0 COMMENT '是否删除',
+  `is_repeat` TINYINT NOT NULL DEFAULT 0 COMMENT '是否重复',
+  `error_num` INT NOT NULL DEFAULT 0 COMMENT '错误次数',
+  `from_exam` TINYINT NOT NULL DEFAULT 0 COMMENT '是否来自考试',
+  `mark_text` VARCHAR(255) NOT NULL DEFAULT '' COMMENT '备注',
+  `analyze_video_id` BIGINT DEFAULT NULL COMMENT '解析视频ID',
+  `creater_uid` BIGINT DEFAULT NULL COMMENT '创建人ID',
+  `creater_name` VARCHAR(128) NOT NULL DEFAULT '' COMMENT '创建人',
+  `review_uid` BIGINT DEFAULT NULL COMMENT '审核人ID',
+  `review_name` VARCHAR(128) NOT NULL DEFAULT '' COMMENT '审核人',
+  `review_status` TINYINT DEFAULT NULL COMMENT '审核状态',
+  `review_comment` VARCHAR(1000) NOT NULL DEFAULT '' COMMENT '审核说明',
+  `review_time` DATETIME DEFAULT NULL COMMENT '审核时间',
+  `edit_uid` BIGINT DEFAULT NULL COMMENT '编辑人ID',
+  `edit_name` VARCHAR(128) NOT NULL DEFAULT '' COMMENT '编辑人',
+  `edit_time` DATETIME DEFAULT NULL COMMENT '编辑时间',
+  `create_time_remote` DATETIME DEFAULT NULL COMMENT '远端创建时间',
+  `updated_at_remote` DATETIME DEFAULT NULL COMMENT '远端更新时间',
+  `raw_json` JSON DEFAULT NULL COMMENT '原始JSON',
+  `last_sync_batch_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '最近同步批次ID',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_question_id` (`question_id`),
+  KEY `idx_three_id` (`three_id`),
+  KEY `idx_parent_id` (`parent_id`),
+  KEY `idx_root_id` (`root_id`),
+  KEY `idx_updated_at_remote` (`updated_at_remote`),
+  KEY `idx_last_sync_batch_id` (`last_sync_batch_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='题目主表';
+
+CREATE TABLE IF NOT EXISTS `ag_question_option` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `question_id` BIGINT NOT NULL COMMENT '题目ID',
+  `option_no` INT NOT NULL COMMENT '选项序号，从1开始',
+  `option_label` VARCHAR(8) NOT NULL DEFAULT '' COMMENT '选项标签，如A/B/C/D',
+  `option_html` TEXT NOT NULL COMMENT '选项HTML',
+  `is_answer` TINYINT NOT NULL DEFAULT 0 COMMENT '是否正确答案',
+  `raw_value` TEXT COMMENT '原始值',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_question_option_no` (`question_id`, `option_no`),
+  KEY `idx_question_label` (`question_id`, `option_label`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='题目选项表';
+
+CREATE TABLE IF NOT EXISTS `ag_chapter_question` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `subject_code` VARCHAR(32) NOT NULL COMMENT '科目编码',
+  `chapter_id` BIGINT NOT NULL COMMENT '章节ID',
+  `question_id` BIGINT NOT NULL COMMENT '题目ID',
+  `question_index` INT NOT NULL DEFAULT 0 COMMENT '题目序号',
+  `belong_page` INT NOT NULL DEFAULT 1 COMMENT '所属页码',
+  `question_type` VARCHAR(32) NOT NULL DEFAULT '' COMMENT '题目类型',
+  `answer_type` VARCHAR(32) NOT NULL DEFAULT '' COMMENT '答案类型',
+  `chapter_num` INT DEFAULT NULL COMMENT '章节题目接口返回 chapter_section_num.chapter_num',
+  `section_num` INT DEFAULT NULL COMMENT '章节题目接口返回 chapter_section_num.section_num',
+  `raw_json` JSON DEFAULT NULL COMMENT '原始JSON',
+  `last_sync_batch_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '最近同步批次ID',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_chapter_question` (`chapter_id`, `question_id`),
+  KEY `idx_question_id` (`question_id`),
+  KEY `idx_subject_chapter` (`subject_code`, `chapter_id`),
+  KEY `idx_last_sync_batch_id` (`last_sync_batch_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='章节题目关联表';
+
+CREATE TABLE IF NOT EXISTS `ag_question_video` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `question_id` BIGINT NOT NULL COMMENT '题目ID',
+  `video_id` BIGINT DEFAULT NULL COMMENT '视频ID',
+  `video_title` VARCHAR(255) NOT NULL DEFAULT '' COMMENT '视频标题',
+  `video_url` VARCHAR(500) NOT NULL DEFAULT '' COMMENT '视频地址',
+  `raw_json` JSON DEFAULT NULL COMMENT '原始JSON',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_question_id` (`question_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='题目关联视频表';
