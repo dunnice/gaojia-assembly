@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS ag_chapter_question (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   subject_code TEXT NOT NULL DEFAULT '',
   chapter_id INTEGER NOT NULL,
+  section_chapter_id INTEGER NOT NULL DEFAULT 0,
   question_id INTEGER NOT NULL,
   question_index INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -55,6 +56,7 @@ CREATE TABLE IF NOT EXISTS ag_chapter_question (
 
 CREATE INDEX IF NOT EXISTS idx_cq_question ON ag_chapter_question(question_id);
 CREATE INDEX IF NOT EXISTS idx_cq_chapter ON ag_chapter_question(chapter_id);
+CREATE INDEX IF NOT EXISTS idx_cq_section ON ag_chapter_question(section_chapter_id);
 
 CREATE TABLE IF NOT EXISTS app_user (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

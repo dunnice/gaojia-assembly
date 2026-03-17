@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"flag"
 	"log"
 	"os"
@@ -14,11 +15,31 @@ import (
 )
 
 func main() {
-	dbPath := flag.String("db", "gaojia.db", "SQLite database path")
+	driver := flag.String("driver", "sqlite", "database driver: sqlite | mysql")
+	dbPath := flag.String("db", "gaojia.db", "SQLite database path (when driver=sqlite)")
+	mysqlDSN := flag.String("mysql-dsn", "", "MySQL DSN (when driver=mysql), e.g. user:pass@tcp(127.0.0.1:3306)/dbname")
 	port := flag.String("port", "5170", "HTTP port")
 	flag.Parse()
 
-	database, err := db.OpenSQLite(*dbPath)
+	var database *sql.DB
+	var err error
+	var driverType db.Driver
+
+	switch *driver {
+	case "mysql":
+		driverType = db.DriverMySQL
+		dsn := *mysqlDSN
+		if dsn == "" {
+			dsn = os.Getenv("MYSQL_DSN")
+		}
+		if dsn == "" {
+			log.Fatal("mysql driver requires -mysql-dsn or MYSQL_DSN env")
+		}
+		database, err = db.Open(driverType, dsn)
+	default:
+		driverType = db.DriverSQLite
+		database, err = db.Open(driverType, *dbPath)
+	}
 	if err != nil {
 		log.Fatalf("open db: %v", err)
 	}
@@ -32,7 +53,7 @@ func main() {
 	}
 
 	chapterRepo := repository.NewChapterRepository(database)
-	questionRepo := repository.NewQuestionRepository(database)
+	questionRepo := repository.NewQuestionRepository(database, driverType)
 	chapterService := service.NewChapterService(chapterRepo)
 	questionService := service.NewQuestionService(questionRepo, chapterRepo, defaultUserID)
 	h := handler.NewHandler(chapterService, questionService)

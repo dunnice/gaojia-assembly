@@ -13,8 +13,8 @@
       </div>
 
       <article class="question-detail">
-        <div v-if="detail.materialText" class="material-box" v-html="detail.materialText"></div>
-        <div class="question-title" v-html="detail.titleHtml"></div>
+        <div v-if="detail.materialText" class="material-box" v-html="detail.materialText" @click="onContentClick"></div>
+        <div class="question-title" v-html="detail.titleHtml" @click="onContentClick"></div>
 
         <div class="options">
           <label v-for="option in detail.options" :key="option.optionLabel" class="option-item">
@@ -25,7 +25,7 @@
               @change="onOptionChange(option.optionLabel, $event)"
             />
             <span class="option-label">{{ option.optionLabel }}</span>
-            <span class="option-content" v-html="option.optionHtml"></span>
+            <span class="option-content" v-html="option.optionHtml" @click="onContentClick"></span>
           </label>
         </div>
 
@@ -56,7 +56,7 @@
 
         <section class="analysis-box">
           <h3>解析</h3>
-          <div v-if="detail.analyzeText" class="analysis-content" v-html="decodeHtml(detail.analyzeText)"></div>
+          <div v-if="detail.analyzeText" class="analysis-content" v-html="decodeHtml(detail.analyzeText)" @click="onContentClick"></div>
           <p v-else class="empty-inline">当前题目暂无解析。</p>
         </section>
 
@@ -89,7 +89,19 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useImagePreview } from '../composables/useImagePreview'
 import type { AnswerSubmitResponse, QuestionDetail } from '../types'
+
+const { openPreview } = useImagePreview()
+
+function onContentClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  if (target.tagName === 'IMG' && target instanceof HTMLImageElement) {
+    e.preventDefault()
+    e.stopPropagation()
+    openPreview(target.src)
+  }
+}
 
 const props = defineProps<{
   detail: QuestionDetail | null

@@ -5,7 +5,7 @@
       <p>{{ description }}</p>
     </div>
     <div class="chapter-list">
-      <template v-for="chapter in chapters" :key="chapter.chapterId">
+      <template v-for="(chapter, idx) in chapters" :key="chapter.chapterId">
         <div class="chapter-item-wrap">
           <button
             class="chapter-item"
@@ -26,7 +26,7 @@
             />
             <div class="chapter-item-content">
               <div class="chapter-title-row">
-                <span class="chapter-name">{{ chapter.chapterName }}</span>
+                <span class="chapter-name">{{ formatChapterTitle(idx + 1, chapter.chapterName) }}</span>
                 <strong>{{ chapter.allQuestionNum }}</strong>
               </div>
               <small v-if="chapter.children?.length" class="sub-hint">
@@ -47,7 +47,7 @@
               </div>
             </button>
             <button
-              v-for="child in chapter.children"
+              v-for="(child, childIdx) in chapter.children"
               :key="child.chapterId"
               class="chapter-item chapter-item-child"
               :class="{ active: isSelected(child.chapterId, false) }"
@@ -55,7 +55,7 @@
             >
               <span class="expand-placeholder"></span>
               <div class="chapter-item-content">
-                <span class="chapter-name">{{ child.chapterName }}</span>
+                <span class="chapter-name">第{{ childIdx + 1 }}节 {{ stripEdition(child.chapterName) }}</span>
                 <strong>{{ child.allQuestionNum }}</strong>
               </div>
             </button>
@@ -69,6 +69,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import type { ChapterNode } from '../types'
+import { formatChapterTitle, stripEdition } from '../utils/chapter'
 
 const props = defineProps<{
   title: string

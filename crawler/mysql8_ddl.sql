@@ -137,7 +137,8 @@ CREATE TABLE IF NOT EXISTS `ag_question_option` (
 CREATE TABLE IF NOT EXISTS `ag_chapter_question` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
   `subject_code` VARCHAR(32) NOT NULL COMMENT '科目编码',
-  `chapter_id` BIGINT NOT NULL COMMENT '章节ID',
+  `chapter_id` BIGINT NOT NULL COMMENT '一级章节ID',
+  `section_chapter_id` BIGINT NOT NULL DEFAULT 0 COMMENT '归属的二级章节/节ID，0表示无子节或归属一级',
   `question_id` BIGINT NOT NULL COMMENT '题目ID',
   `question_index` INT NOT NULL DEFAULT 0 COMMENT '题目序号',
   `belong_page` INT NOT NULL DEFAULT 1 COMMENT '所属页码',
@@ -153,6 +154,7 @@ CREATE TABLE IF NOT EXISTS `ag_chapter_question` (
   UNIQUE KEY `uk_chapter_question` (`chapter_id`, `question_id`),
   KEY `idx_question_id` (`question_id`),
   KEY `idx_subject_chapter` (`subject_code`, `chapter_id`),
+  KEY `idx_section_chapter` (`section_chapter_id`),
   KEY `idx_last_sync_batch_id` (`last_sync_batch_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='章节题目关联表';
 

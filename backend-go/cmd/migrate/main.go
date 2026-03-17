@@ -8,21 +8,33 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/ruankao/gaojia-backend-go/internal/db"
-	_ "github.com/mattn/go-sqlite3"
 )
 
 func main() {
 	dsn := os.Getenv("MYSQL_DSN")
 	if dsn == "" {
-		dsn = "ruankao_user:Rk8!vN3#qL7@xP2$hT9^mZ4&cW6@tcp(127.0.0.1:3306)/ruankao_gaojia?charset=utf8mb4&parseTime=true"
+		dsn = "ruankao_user:ruankao_user123@tcp(127.0.0.1:3306)/ruankao_gaojia?charset=utf8mb4&parseTime=true"
 		log.Printf("using default MYSQL_DSN (set MYSQL_DSN env to override)")
 	}
 
 	dbPath := flag.String("db", "gaojia.db", "SQLite output path")
+	rebuild := flag.Bool("rebuild", false, "remove existing SQLite file and recreate from scratch")
 	flag.Parse()
+
+	if *rebuild {
+		if err := os.Remove(*dbPath); err != nil && !os.IsNotExist(err) {
+			log.Fatalf("rebuild: remove %s: %v", *dbPath, err)
+		}
+		log.Printf("rebuild: removed %s (if existed)", *dbPath)
+		// 若路径带目录，确保存在
+		if dir := filepath.Dir(*dbPath); dir != "." {
+			_ = os.MkdirAll(dir, 0755)
+		}
+	}
 
 	mysqlDB, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -47,7 +59,7 @@ func main() {
 	}
 	defer tx.Rollback()
 
-	// 清空目标表（保留 schema）
+	// 清空目标表（保留 schema），便于全量覆盖
 	for _, t := range []string{"user_answer_record", "user_question_mark", "app_user", "ag_chapter_question", "ag_question_option", "ag_question", "ag_chapter"} {
 		if _, err := tx.Exec(fmt.Sprintf("DELETE FROM %s", t)); err != nil {
 			log.Printf("clear %s: %v (may not exist yet)", t, err)
@@ -203,7 +215,7 @@ func migrateQuestionOptions(mysql *sql.DB, tx *sql.Tx) error {
 
 func migrateChapterQuestions(mysql *sql.DB, tx *sql.Tx) error {
 	rows, err := mysql.Query(`
-		SELECT subject_code, chapter_id, question_id, question_index
+		SELECT subject_code, chapter_id, COALESCE(section_chapter_id, 0), question_id, question_index
 		FROM ag_chapter_question
 	`)
 	if err != nil {
@@ -212,8 +224,8 @@ func migrateChapterQuestions(mysql *sql.DB, tx *sql.Tx) error {
 	defer rows.Close()
 
 	ins, err := tx.Prepare(`
-		INSERT INTO ag_chapter_question (subject_code, chapter_id, question_id, question_index)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO ag_chapter_question (subject_code, chapter_id, section_chapter_id, question_id, question_index)
+		VALUES (?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -222,12 +234,12 @@ func migrateChapterQuestions(mysql *sql.DB, tx *sql.Tx) error {
 
 	for rows.Next() {
 		var subj string
-		var chapterID, questionID int64
+		var chapterID, sectionChapterID, questionID int64
 		var idx int
-		if err := rows.Scan(&subj, &chapterID, &questionID, &idx); err != nil {
+		if err := rows.Scan(&subj, &chapterID, &sectionChapterID, &questionID, &idx); err != nil {
 			return err
 		}
-		if _, err := ins.Exec(nullStr(subj), chapterID, questionID, idx); err != nil {
+		if _, err := ins.Exec(nullStr(subj), chapterID, sectionChapterID, questionID, idx); err != nil {
 			return err
 		}
 	}

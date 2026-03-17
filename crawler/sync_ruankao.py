@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import re
 import sys
 import time
 import uuid
@@ -12,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 
 import pymysql
 import requests
@@ -22,11 +25,18 @@ def now_str() -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="同步 51CTO 软考高架题库到 MySQL")
+    parser = argparse.ArgumentParser(
+        description="同步 51CTO 软考高架题库到 MySQL。章与节结构来自 /napi/chapter/list/sub-{subject} 接口。"
+    )
     parser.add_argument(
         "--config",
         default=str(Path(__file__).with_name("config.json")),
         help="配置文件路径，默认读取当前目录 config.json",
+    )
+    parser.add_argument(
+        "--sync-chapters",
+        action="store_true",
+        help="仅同步章节结构（章+节）及章节与题目的关联关系，不拉取题目详情。等价于 --skip-question-detail",
     )
     parser.add_argument(
         "--skip-question-detail",
@@ -36,14 +46,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--chapter-id",
         type=int,
-        help="只同步指定一级章节ID",
+        help="只同步指定一级章节ID，不指定则同步全部",
     )
     parser.add_argument(
         "--force",
         action="store_true",
         help="强制重新拉取，忽略本地已存在数据",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.sync_chapters:
+        args.skip_question_detail = True
+    return args
 
 
 def load_config(path: str) -> dict[str, Any]:
@@ -120,6 +133,128 @@ def normalize_answer_list(raw_answer: Any) -> list[str]:
 
 def option_label(index: int) -> str:
     return chr(ord("A") + index - 1)
+
+
+def _build_chapter_tree(chapter_list: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    将 chapter/list 返回的列表构建为章-节树。
+    支持嵌套结构（含 child/children）或扁平结构（pid 区分父子）。
+    """
+    if not chapter_list:
+        return []
+    if any(item.get("child") or item.get("children") for item in chapter_list):
+        return chapter_list
+    pid_key = "pid"
+    id_key = "id"
+    child_map: dict[int, list[dict[str, Any]]] = {}
+    tops: list[dict[str, Any]] = []
+    for item in chapter_list:
+        item_id = safe_int(item.get(id_key))
+        pid = safe_int(item.get(pid_key))
+        if not item_id:
+            continue
+        if not pid or pid == 0:
+            tops.append(item)
+        else:
+            child_map.setdefault(pid, []).append(item)
+    for children in child_map.values():
+        children.sort(key=lambda c: (safe_int(c.get("sort")) or 0, safe_int(c.get("id")) or 0))
+    for top in tops:
+        top_id = safe_int(top.get(id_key))
+        children = child_map.get(top_id, [])
+        if children and "child" not in top:
+            top["child"] = children
+    tops.sort(key=lambda c: (safe_int(c.get("sort")) or 0, safe_int(c.get("id")) or 0))
+    return tops
+
+
+def get_sections_from_chapter(chapter: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    从 chapter/list 返回的章节结构中提取小节列表。
+    支持 child、children 字段，按 sort、id 排序，去重。
+    """
+    sections: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for key in ("child", "children"):
+        for s in chapter.get(key) or []:
+            sid = safe_int(s.get("id"))
+            if sid and sid not in seen:
+                seen.add(sid)
+                sections.append(s)
+    return sorted(sections, key=lambda c: (safe_int(c.get("sort")) or 0, safe_int(c.get("id")) or 0))
+
+
+def resolve_section_chapter_id(top_chapter: dict[str, Any], question_index: int) -> int:
+    """
+    根据题目序号与一级章节下子节的题数，计算题目归属的二级章节 ID。
+    子节按 sort 排序，题号 1~n1 归属第 1 节，n1+1~n1+n2 归属第 2 节，以此类推。
+    若无子节或题号超出范围，返回一级章节 ID。
+    """
+    children = get_sections_from_chapter(top_chapter)
+    if not children:
+        return safe_int(top_chapter.get("id")) or 0
+
+    start = 1
+    for child in children:
+        n = safe_int(child.get("all_question_num")) or 0
+        end = start + n - 1
+        if start <= question_index <= end:
+            return safe_int(child.get("id")) or 0
+        start = end + 1
+    return safe_int(top_chapter.get("id")) or 0
+
+
+# 匹配 <img ... src="..." ...> 或 <img ... src='...' ...>，捕获引号和 URL
+_IMG_SRC_RE = re.compile(
+    r'<img\s+[^>]*src=(["\'])([^"\']+)\1[^>]*>',
+    re.IGNORECASE,
+)
+
+
+def _resolve_image_url(src: str, base_url: str) -> str:
+    """将相对或协议相对 URL 转为绝对 URL"""
+    if not src or not src.strip():
+        return ""
+    src = src.strip()
+    if src.startswith("//"):
+        return "https:" + src
+    if src.startswith(("http://", "https://")):
+        return src
+    return urljoin(base_url.rstrip("/") + "/", src)
+
+
+def inline_images_in_html(
+    html: str,
+    base_url: str,
+    session: requests.Session,
+    timeout: int = 15,
+) -> str:
+    """
+    将 HTML 中的 <img src="http(s)://..."> 拉取并替换为 data:image/xxx;base64,...
+    失败时保留原 URL。
+    """
+    if not html or "<img" not in html.lower():
+        return html
+
+    def replace_one(match: re.Match) -> str:
+        quote_char = match.group(1)
+        src = match.group(2)
+        full_url = _resolve_image_url(src, base_url)
+        if not full_url:
+            return match.group(0)
+        try:
+            resp = session.get(full_url, timeout=timeout)
+            resp.raise_for_status()
+            raw = resp.content
+        except Exception:
+            return match.group(0)
+        content_type = resp.headers.get("Content-Type", "image/png").split(";")[0].strip()
+        if content_type not in ("image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"):
+            content_type = "image/png"
+        b64 = base64.b64encode(raw).decode("ascii")
+        data_uri = f"data:{content_type};base64,{b64}"
+        return f'<img src={quote_char}{data_uri}{quote_char}'
+    return _IMG_SRC_RE.sub(replace_one, html)
 
 
 @dataclass
@@ -431,6 +566,7 @@ class Database:
         *,
         subject_code: str,
         chapter_id: int,
+        section_chapter_id: int,
         question_item: dict[str, Any],
         chapter_num: int | None,
         section_num: int | None,
@@ -438,14 +574,15 @@ class Database:
     ) -> None:
         sql = """
         INSERT INTO ag_chapter_question (
-            subject_code, chapter_id, question_id, question_index, belong_page,
+            subject_code, chapter_id, section_chapter_id, question_id, question_index, belong_page,
             question_type, answer_type, chapter_num, section_num, raw_json, last_sync_batch_id
         ) VALUES (
-            %s, %s, %s, %s, %s,
+            %s, %s, %s, %s, %s, %s,
             %s, %s, %s, %s, CAST(%s AS JSON), %s
         )
         ON DUPLICATE KEY UPDATE
             subject_code = VALUES(subject_code),
+            section_chapter_id = VALUES(section_chapter_id),
             question_index = VALUES(question_index),
             belong_page = VALUES(belong_page),
             question_type = VALUES(question_type),
@@ -461,6 +598,7 @@ class Database:
             (
                 subject_code,
                 chapter_id,
+                section_chapter_id,
                 safe_int(question_item.get("question_id")),
                 safe_int(question_item.get("index")) or 0,
                 safe_int(question_item.get("belong_page")) or 1,
@@ -592,6 +730,14 @@ class RuankaoClient:
             params={"assembly_id": assembly_id},
         )
 
+    def section_questions(self, section_id: int) -> dict[str, Any]:
+        """按小节 ID 获取该小节下的题目。"""
+        return self._request(
+            "GET",
+            "/napi/chapter/section-questions",
+            params={"id": section_id, "user_subject": self.subject_code},
+        )
+
     def get_question(self, question_id: int) -> dict[str, Any]:
         return self._request(
             "GET",
@@ -604,6 +750,28 @@ class SyncService:
     def __init__(self, db: Database, client: RuankaoClient) -> None:
         self.db = db
         self.client = client
+
+    def _inline_images_in_question(
+        self,
+        question: dict[str, Any],
+        options: list[str],
+    ) -> tuple[dict[str, Any], list[str]]:
+        """将题目 HTML 中的图片 URL 拉取并替换为 base64 data URI"""
+        base = self.client.base_url
+        session = self.client.session
+        timeout = self.client.timeout
+
+        q = dict(question)
+        for key in ("title", "question_title", "analyze", "material_text"):
+            val = q.get(key)
+            if val and isinstance(val, str):
+                q[key] = inline_images_in_html(val, base, session, timeout)
+
+        new_options = [
+            inline_images_in_html(opt, base, session, timeout)
+            for opt in options
+        ]
+        return q, new_options
 
     def _call_with_log(
         self,
@@ -669,22 +837,25 @@ class SyncService:
             func=self.client.chapter_list,
         )
 
-        chapter_data = chapter_resp.get("data", {})
-        chapter_list = chapter_data.get("list", [])
-        subject_name = chapter_data.get("title") or f"subject-{ctx.subject_code}"
+        chapter_data = chapter_resp.get("data", {}) or {}
+        if isinstance(chapter_data, list):
+            chapter_list = chapter_data
+            subject_name = f"subject-{ctx.subject_code}"
+        else:
+            chapter_list = chapter_data.get("list", []) or []
+            subject_name = chapter_data.get("title") or f"subject-{ctx.subject_code}"
 
         self.db.upsert_subject(ctx.subject_code, subject_name, chapter_data)
 
-        top_chapters: list[dict[str, Any]] = []
-        for top in chapter_list:
+        top_chapters = _build_chapter_tree(chapter_list)
+        for top in top_chapters:
             self.db.upsert_chapter(
                 chapter=top,
                 subject_code=ctx.subject_code,
                 chapter_level=1,
                 last_sync_batch_id=chapter_log_id,
             )
-            top_chapters.append(top)
-            for child in top.get("child", []) or []:
+            for child in get_sections_from_chapter(top):
                 self.db.upsert_chapter(
                     chapter=child,
                     subject_code=ctx.subject_code,
@@ -708,25 +879,120 @@ class SyncService:
         if not chapter_id:
             return
         total_num = safe_int(top_chapter.get("all_question_num")) or 0
-        print(f"[{now_str()}] 同步一级章节 {chapter_id} - {top_chapter.get('name')}，题数 {total_num}")
+        sorted_children = get_sections_from_chapter(top_chapter)
 
-        local_question_count = self.db.chapter_question_count(chapter_id)
-        chapter_questions_complete = total_num > 0 and local_question_count >= total_num
+        print(f"[{now_str()}] 同步一级章节 {chapter_id} - {top_chapter.get('name')}，题数 {total_num}，小节数 {len(sorted_children)}")
 
-        if not force and chapter_questions_complete:
-            print(
-                f"[{now_str()}] 章节 {chapter_id} 已有本地题目关系 {local_question_count}/{total_num}，跳过章节接口抓取"
-            )
-            if skip_question_detail:
-                return
+        all_questions: list[dict[str, Any]] = []
 
-            for question_id in self.db.local_question_ids_by_chapter(chapter_id):
-                if self.db.question_detail_exists(question_id):
-                    print(f"[{now_str()}] 题目详情已存在，跳过 question_id={question_id}")
+        if sorted_children:
+            # 按小节获取题目：每个小节调用 section-questions 接口
+            for section in sorted_children:
+                section_id = safe_int(section.get("id"))
+                if not section_id:
                     continue
-                self.sync_question_detail(ctx, chapter_id, question_id)
+                section_name = section.get("name", "")
+                self._sync_section_questions(ctx, chapter_id, section_id, section_name, all_questions)
+        else:
+            # 无子节时回退到 assembly 流程
+            self._sync_chapter_by_assembly(ctx, top_chapter, chapter_id, total_num, all_questions)
+
+        self.db.commit()
+        print(f"[{now_str()}] 章节 {chapter_id} 题目列表已同步，共 {len(all_questions)} 题")
+
+        if skip_question_detail:
             return
 
+        for question_item in all_questions:
+            question_id = safe_int(question_item.get("question_id"))
+            if not question_id:
+                continue
+            if not force and self.db.question_detail_exists(question_id):
+                print(f"[{now_str()}] 题目详情已存在，跳过 question_id={question_id}")
+                continue
+            self.sync_question_detail(ctx, chapter_id, question_id)
+
+    def _sync_section_questions(
+        self,
+        ctx: SyncContext,
+        chapter_id: int,
+        section_id: int,
+        section_name: str,
+        out_questions: list[dict[str, Any]],
+    ) -> None:
+        """按小节 ID 调用 section-questions 接口，获取该小节下的题目。"""
+        section_resp, questions_log_id = self._call_with_log(
+            ctx=ctx,
+            sync_type="section_questions",
+            chapter_id=section_id,
+            question_id=None,
+            method="GET",
+            path="/napi/chapter/section-questions",
+            request_payload={"id": section_id, "user_subject": ctx.subject_code},
+            func=lambda: self.client.section_questions(section_id),
+        )
+
+        inner = section_resp.get("data", {}) or {}
+        question_data = inner.get("data", {}) or {}
+        questions = question_data.get("question", []) or []
+        chapter_section_num = question_data.get("chapter_section_num", {}) or {}
+        chapter_num = safe_int(chapter_section_num.get("chapter_num"))
+        section_num = safe_int(chapter_section_num.get("section_num"))
+
+        for question_item in questions:
+            question_id = safe_int(question_item.get("question_id"))
+            if not question_id:
+                continue
+
+            placeholder = {
+                "id": question_id,
+                "question_id": question_id,
+                "title": question_item.get("question_title", ""),
+                "question_type": question_item.get("question_type", ""),
+                "show_type_name": question_item.get("show_type_name", ""),
+                "answer_type": question_item.get("answer_type", ""),
+                "score_rule": question_item.get("score_rule", ""),
+                "material_text": question_item.get("material_text", ""),
+                "sort_son": question_item.get("sort_son", 0),
+                "analyze": question_item.get("analyze", ""),
+                "answer": question_item.get("answer", []),
+                "option": question_item.get("option", []),
+                "new_parent_id": question_item.get("new_parent_id"),
+            }
+            opts_raw = normalize_option_list(question_item.get("option"))
+            placeholder, opts_inlined = self._inline_images_in_question(placeholder, opts_raw)
+            self.db.upsert_question(
+                question=placeholder,
+                answer_type=question_item.get("answer_type"),
+                last_sync_batch_id=questions_log_id,
+            )
+            self.db.replace_question_options(
+                question_id=question_id,
+                options=opts_inlined,
+                answers=normalize_answer_list(question_item.get("answer")),
+            )
+            self.db.upsert_chapter_question(
+                subject_code=ctx.subject_code,
+                chapter_id=chapter_id,
+                section_chapter_id=section_id,
+                question_item=question_item,
+                chapter_num=chapter_num,
+                section_num=section_num,
+                last_sync_batch_id=questions_log_id,
+            )
+            out_questions.append(question_item)
+
+        print(f"[{now_str()}] 小节 {section_id} - {section_name} 已同步 {len(questions)} 题")
+
+    def _sync_chapter_by_assembly(
+        self,
+        ctx: SyncContext,
+        top_chapter: dict[str, Any],
+        chapter_id: int,
+        total_num: int,
+        out_questions: list[dict[str, Any]],
+    ) -> None:
+        """无子节时使用 assembly 流程获取整章题目。"""
         progress_resp, _ = self._call_with_log(
             ctx=ctx,
             sync_type="chapter_has_progress",
@@ -777,7 +1043,6 @@ class SyncService:
             if not question_id:
                 continue
 
-            # 先用章节题目接口里的简版数据占位，避免外键问题
             placeholder = {
                 "id": question_id,
                 "question_id": question_id,
@@ -793,6 +1058,8 @@ class SyncService:
                 "option": question_item.get("option", []),
                 "new_parent_id": question_item.get("new_parent_id"),
             }
+            opts_raw = normalize_option_list(question_item.get("option"))
+            placeholder, opts_inlined = self._inline_images_in_question(placeholder, opts_raw)
             self.db.upsert_question(
                 question=placeholder,
                 answer_type=question_item.get("answer_type"),
@@ -800,32 +1067,21 @@ class SyncService:
             )
             self.db.replace_question_options(
                 question_id=question_id,
-                options=normalize_option_list(question_item.get("option")),
+                options=opts_inlined,
                 answers=normalize_answer_list(question_item.get("answer")),
             )
+            question_index = safe_int(question_item.get("index")) or 0
+            section_chapter_id = resolve_section_chapter_id(top_chapter, question_index)
             self.db.upsert_chapter_question(
                 subject_code=ctx.subject_code,
                 chapter_id=chapter_id,
+                section_chapter_id=section_chapter_id,
                 question_item=question_item,
                 chapter_num=chapter_num,
                 section_num=section_num,
                 last_sync_batch_id=questions_log_id,
             )
-
-        self.db.commit()
-        print(f"[{now_str()}] 章节 {chapter_id} 题目列表已同步，共 {len(questions)} 题")
-
-        if skip_question_detail:
-            return
-
-        for question_item in questions:
-            question_id = safe_int(question_item.get("question_id"))
-            if not question_id:
-                continue
-            if not force and self.db.question_detail_exists(question_id):
-                print(f"[{now_str()}] 题目详情已存在，跳过 question_id={question_id}")
-                continue
-            self.sync_question_detail(ctx, chapter_id, question_id)
+            out_questions.append(question_item)
 
     def sync_question_detail(self, ctx: SyncContext, chapter_id: int, question_id: int) -> None:
         detail_resp, detail_log_id = self._call_with_log(
@@ -839,6 +1095,8 @@ class SyncService:
             func=lambda: self.client.get_question(question_id),
         )
         detail = detail_resp.get("data", {})
+        options_raw = normalize_option_list(detail.get("option"))
+        detail, options_inlined = self._inline_images_in_question(detail, options_raw)
 
         self.db.upsert_question(
             question=detail,
@@ -847,7 +1105,7 @@ class SyncService:
         )
         self.db.replace_question_options(
             question_id=question_id,
-            options=normalize_option_list(detail.get("option")),
+            options=options_inlined,
             answers=normalize_answer_list(detail.get("answer")),
         )
         self.db.replace_question_videos(question_id, detail.get("video_info") or [])
@@ -865,7 +1123,8 @@ def main() -> int:
     service = SyncService(db, client)
 
     try:
-        service.sync_all(args.chapter_id, args.skip_question_detail, args.force)
+        skip_detail = args.skip_question_detail or args.sync_chapters
+        service.sync_all(args.chapter_id, skip_detail, args.force)
         return 0
     except KeyboardInterrupt:
         print(f"[{now_str()}] 用户中断", file=sys.stderr)

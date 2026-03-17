@@ -4,15 +4,17 @@ import (
 	"database/sql"
 	"encoding/json"
 
+	"github.com/ruankao/gaojia-backend-go/internal/db"
 	"github.com/ruankao/gaojia-backend-go/internal/dto"
 )
 
 type QuestionRepository struct {
-	db *sql.DB
+	db     *sql.DB
+	driver db.Driver
 }
 
-func NewQuestionRepository(db *sql.DB) *QuestionRepository {
-	return &QuestionRepository{db: db}
+func NewQuestionRepository(database *sql.DB, driver db.Driver) *QuestionRepository {
+	return &QuestionRepository{db: database, driver: driver}
 }
 
 func placeholders(n int) string {
@@ -117,7 +119,7 @@ func (r *QuestionRepository) FindQuestionsByChapterAndIndexRange(userID int64, p
 	if wrongOnly {
 		query += " AND COALESCE(stats.wrong_count, 0) > 0"
 	}
-	query += " ORDER BY cq.question_index"
+	query += " ORDER BY cq.question_index, cq.question_id"
 
 	rows, err := r.db.Query(query, args...)
 	if err != nil {
@@ -125,6 +127,74 @@ func (r *QuestionRepository) FindQuestionsByChapterAndIndexRange(userID int64, p
 	}
 	defer rows.Close()
 
+	var list []dto.QuestionListItem
+	for rows.Next() {
+		var item dto.QuestionListItem
+		var favorite, difficult, wrongCount int
+		var lastWrongAt sql.NullString
+		var analyzeText sql.NullString
+		if err := rows.Scan(&item.QuestionID, &item.QuestionIndex, &item.TitleHtml, &item.ShowTypeName, &item.Knowledge,
+			&favorite, &difficult, &wrongCount, &lastWrongAt, &analyzeText); err != nil {
+			return nil, err
+		}
+		item.Favorite = favorite == 1
+		item.Difficult = difficult == 1
+		item.WrongCount = wrongCount
+		if lastWrongAt.Valid {
+			item.LastWrongAt = &lastWrongAt.String
+		}
+		if analyzeText.Valid {
+			item.AnalyzePreview = trimAnalyze(analyzeText.String, 80)
+		}
+		list = append(list, item)
+	}
+	return list, rows.Err()
+}
+
+// FindQuestionsByParentAndSection 按父章 + section_chapter_id（小节）查题：爬虫有子节时题目存为 chapter_id=父章、section_chapter_id=小节ID
+func (r *QuestionRepository) FindQuestionsByParentAndSection(userID int64, parentChapterID, sectionChapterID int64, favoriteOnly, difficultOnly, wrongOnly bool) ([]dto.QuestionListItem, error) {
+	query := `
+		SELECT
+			cq.question_id,
+			cq.question_index,
+			q.title_html,
+			q.show_type_name,
+			q.knowledge,
+			COALESCE(uqm.favorite, 0) AS favorite,
+			COALESCE(uqm.difficult, 0) AS difficult,
+			COALESCE(stats.wrong_count, 0) AS wrong_count,
+			stats.last_wrong_at,
+			q.analyze_text
+		FROM ag_chapter_question cq
+		JOIN ag_question q ON q.question_id = cq.question_id
+		LEFT JOIN user_question_mark uqm ON uqm.question_id = cq.question_id AND uqm.user_id = ?
+		LEFT JOIN (
+			SELECT question_id,
+				SUM(CASE WHEN is_correct = 0 THEN 1 ELSE 0 END) AS wrong_count,
+				MAX(CASE WHEN is_correct = 0 THEN answered_at END) AS last_wrong_at
+			FROM user_answer_record
+			WHERE user_id = ?
+			GROUP BY question_id
+		) stats ON stats.question_id = cq.question_id
+		WHERE cq.chapter_id = ? AND cq.section_chapter_id = ?
+	`
+	args := []interface{}{userID, userID, parentChapterID, sectionChapterID}
+	if favoriteOnly {
+		query += " AND COALESCE(uqm.favorite, 0) = 1"
+	}
+	if difficultOnly {
+		query += " AND COALESCE(uqm.difficult, 0) = 1"
+	}
+	if wrongOnly {
+		query += " AND COALESCE(stats.wrong_count, 0) > 0"
+	}
+	query += " ORDER BY cq.question_index, cq.question_id"
+
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 	var list []dto.QuestionListItem
 	for rows.Next() {
 		var item dto.QuestionListItem
@@ -192,7 +262,7 @@ func (r *QuestionRepository) FindQuestionsByChapterIDs(userID int64, chapterIDs 
 	if wrongOnly {
 		query += " AND COALESCE(stats.wrong_count, 0) > 0"
 	}
-	query += " ORDER BY cq.chapter_id, cq.question_index"
+	query += " ORDER BY cq.chapter_id, cq.question_index, cq.question_id"
 
 	rows, err := r.db.Query(query, args...)
 	if err != nil {
@@ -353,15 +423,28 @@ func (r *QuestionRepository) UpsertQuestionStatus(userID, questionID int64, favo
 		diff = 1
 	}
 
-	_, err := r.db.Exec(`
-		INSERT INTO user_question_mark (user_id, question_id, favorite, difficult, note)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(user_id, question_id) DO UPDATE SET
-			favorite = excluded.favorite,
-			difficult = excluded.difficult,
-			note = excluded.note,
-			updated_at = datetime('now')
-	`, userID, questionID, fav, diff, note)
+	var query string
+	switch r.driver {
+	case db.DriverMySQL:
+		query = `
+			INSERT INTO user_question_mark (user_id, question_id, favorite, difficult, note)
+			VALUES (?, ?, ?, ?, ?)
+			ON DUPLICATE KEY UPDATE
+				favorite = VALUES(favorite),
+				difficult = VALUES(difficult),
+				note = VALUES(note),
+				updated_at = NOW()`
+	default:
+		query = `
+			INSERT INTO user_question_mark (user_id, question_id, favorite, difficult, note)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(user_id, question_id) DO UPDATE SET
+				favorite = excluded.favorite,
+				difficult = excluded.difficult,
+				note = excluded.note,
+				updated_at = datetime('now')`
+	}
+	_, err := r.db.Exec(query, userID, questionID, fav, diff, note)
 	return err
 }
 

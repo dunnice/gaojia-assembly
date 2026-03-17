@@ -24,7 +24,7 @@
             <span v-if="item.wrongCount" class="badge danger">错 {{ item.wrongCount }}</span>
           </div>
         </div>
-        <h3 v-html="item.titleHtml"></h3>
+        <h3 v-html="item.titleHtml" @click="onContentClick"></h3>
         <p>{{ item.showTypeName }} · {{ item.knowledge || '未标注知识点' }}</p>
         <small v-if="item.lastWrongAt">最近错题：{{ item.lastWrongAt }}</small>
       </button>
@@ -34,7 +34,19 @@
 </template>
 
 <script setup lang="ts">
+import { useImagePreview } from '../composables/useImagePreview'
 import type { QuestionListItem } from '../types'
+
+const { openPreview } = useImagePreview()
+
+function onContentClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  if (target.tagName === 'IMG' && target instanceof HTMLImageElement) {
+    e.preventDefault()
+    e.stopPropagation()
+    openPreview(target.src)
+  }
+}
 
 defineProps<{
   title: string

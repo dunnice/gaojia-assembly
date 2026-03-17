@@ -28,7 +28,7 @@ func (s *QuestionService) ChapterQuestions(chapterID int64, includeChildren, fav
 			return s.questionRepo.FindQuestionsByChapterIDs(s.defaultUserID, ids, favoriteOnly, difficultOnly, wrongOnly)
 		}
 	}
-	// 单章节：先直接查
+	// 单章节：先按 chapter_id 直接查（无子节时题目可能直接挂在该 chapter_id 下）
 	list, err := s.questionRepo.FindQuestionsByChapterIDs(s.defaultUserID, []int64{chapterID}, favoriteOnly, difficultOnly, wrongOnly)
 	if err != nil {
 		return nil, err
@@ -36,11 +36,19 @@ func (s *QuestionService) ChapterQuestions(chapterID int64, includeChildren, fav
 	if len(list) > 0 {
 		return list, nil
 	}
-	// 无结果时，可能是子章节（题目挂在父章节）：按 question_index 范围查
+	// 无结果时，可能是子章节（小节）：爬虫有子节时题目存为 chapter_id=父章、section_chapter_id=小节ID
 	parentID, err := s.chapterRepo.GetParentChapterID(chapterID)
 	if err != nil || parentID == 0 {
 		return list, nil
 	}
+	list, err = s.questionRepo.FindQuestionsByParentAndSection(s.defaultUserID, parentID, chapterID, favoriteOnly, difficultOnly, wrongOnly)
+	if err != nil {
+		return nil, err
+	}
+	if len(list) > 0 {
+		return list, nil
+	}
+	// 再 fallback：按父章下 question_index 范围查（兼容旧数据或按 all_question_num 划分的存储）
 	start, end, err := s.chapterRepo.GetChildQuestionIndexRange(parentID, chapterID)
 	if err != nil || start > end {
 		return list, nil

@@ -45,6 +45,19 @@ textarea {
   backdrop-filter: blur(14px);
 }
 
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.topbar-logo {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
 .topbar h1 {
   font-size: 1.1rem;
 }
@@ -261,16 +274,39 @@ textarea {
   box-shadow: 0 14px 30px rgba(108, 84, 54, 0.08);
 }
 
+/* 章（一级）：暖色背景 */
+.chapter-item:not(.chapter-item-whole):not(.chapter-item-child) {
+  background: rgba(255, 248, 235, 0.95);
+  border-color: rgba(154, 120, 80, 0.12);
+}
+
+/* 节（二级）：略深色背景区分 */
+.chapter-item-child {
+  background: rgba(245, 241, 235, 0.95);
+  border-color: rgba(100, 85, 70, 0.1);
+  padding-left: 18px;
+}
+
+/* 整章：介于章与节之间 */
+.chapter-item-whole {
+  background: rgba(252, 248, 242, 0.95);
+  border-color: rgba(120, 95, 70, 0.1);
+  padding-left: 18px;
+}
+
 .chapter-item,
 .question-card {
   width: 100%;
   text-align: left;
   border: 1px solid rgba(80, 59, 34, 0.08);
   border-radius: 18px;
-  background: #fffaf3;
   padding: 14px;
   cursor: pointer;
   transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.question-card {
+  background: #fffaf3;
 }
 
 .chapter-item:hover,
@@ -349,6 +385,70 @@ textarea {
 }
 .analysis-content p:last-child {
   margin-bottom: 0;
+}
+
+/* 题目 HTML 中的图片（含 base64 内联图）自适应展示，点击可预览放大 */
+.material-box img,
+.question-title img,
+.option-content img,
+.analysis-content img,
+.question-card h3 img {
+  max-width: 100%;
+  height: auto;
+  vertical-align: middle;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+/* 图片预览弹层 */
+.img-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.85);
+  cursor: zoom-out;
+}
+
+.img-preview-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.img-preview-close:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.img-preview-img {
+  max-width: 95vw;
+  max-height: 95vh;
+  object-fit: contain;
+  border-radius: 8px;
+  cursor: default;
+}
+
+.img-preview-enter-active,
+.img-preview-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.img-preview-enter-from,
+.img-preview-leave-to {
+  opacity: 0;
 }
 
 .question-card p,
@@ -433,14 +533,26 @@ textarea {
   background: #fffdf8;
 }
 
+.result-box {
+  margin-top: 16px;
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .result-box.success {
-  background: rgba(36, 138, 94, 0.12);
-  border: 1px solid rgba(36, 138, 94, 0.25);
+  background: transparent;
+  border: none;
 }
 
 .result-box.error {
-  background: rgba(194, 68, 68, 0.2);
-  border: 1px solid rgba(194, 68, 68, 0.35);
+  background: rgba(194, 68, 68, 0.18);
+  border: 1px solid rgba(194, 68, 68, 0.3);
+}
+
+.result-box.success strong {
+  color: #248a5e;
 }
 
 .icon-btn {

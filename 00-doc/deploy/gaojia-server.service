@@ -1,0 +1,14 @@
+[Unit]
+Description=Gaojia Backend (Go)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/gaojia
+ExecStart=/opt/gaojia/gaojia-server -driver sqlite -db /opt/gaojia/gaojia.db -port 5170
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

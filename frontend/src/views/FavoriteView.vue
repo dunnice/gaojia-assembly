@@ -37,6 +37,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api'
+import { formatChapterTitle, stripEdition } from '../utils/chapter'
 import ChapterSidebar from '../components/ChapterSidebar.vue'
 import QuestionDetailPanel from '../components/QuestionDetailPanel.vue'
 import QuestionListPanel from '../components/QuestionListPanel.vue'
@@ -54,12 +55,16 @@ let selectRequestId = 0
 
 const currentChapterName = computed(() => {
   if (!selectedChapterId.value) return '请选择章节'
-  for (const c of chapters.value) {
+  for (let i = 0; i < chapters.value.length; i++) {
+    const c = chapters.value[i]
     if (c.chapterId === selectedChapterId.value) {
-      return includeChildren.value ? `${c.chapterName}（整章）` : c.chapterName
+      const formatted = formatChapterTitle(i + 1, c.chapterName)
+      return includeChildren.value ? `${formatted}（整章）` : formatted
     }
-    const child = c.children?.find((ch) => ch.chapterId === selectedChapterId.value)
-    if (child) return child.chapterName
+    const childIdx = c.children?.findIndex((ch) => ch.chapterId === selectedChapterId.value)
+    if (childIdx !== undefined && childIdx >= 0 && c.children) {
+      return `第${childIdx + 1}节 ${stripEdition(c.children[childIdx].chapterName)}`
+    }
   }
   return '请选择章节'
 })
